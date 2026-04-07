@@ -6,7 +6,18 @@ logger = get_logger("IntentParser")
 
 # ================= APP / SYSTEM KEYWORDS =================
 
+SCREENSHOT_WORDS = [
+    "take a screenshot", "take screenshot",
+    "capture screen", "capture the screen",
+    "screenshot", "screen capture"
+]
+
+SHUTDOWN_WORDS = ["shutdown", "shut down", "turn off", "power off"]
+RESTART_WORDS = ["restart", "reboot", "restart system"]
+SLEEP_WORDS = ["sleep mode", "hibernate", "suspend", "go to sleep", "sleep system"]
+
 OPEN_WORDS = ["open", "launch", "start"]
+CLOSE_ALL_WORDS = ["close all", "close everything", "close all apps", "quit all", "exit all"]
 CLOSE_WORDS = ["close", "exit", "quit", "stop"]
 
 BACKGROUND_WORDS = ["background", "in background", "in the background"]
@@ -41,10 +52,30 @@ BROWSER_WORDS = ["chrome", "edge"]
 
 # ================= TIME =================
 
-TIME_WORDS = ["time", "what time", "current time"]
+TIME_WORDS = ["what time", "current time", "tell me the time", "what is the time"]
 DATE_WORDS = ["date", "today", "what date"]
-TIMER_WORDS = ["set timer", "start timer"]
-ALARM_WORDS = ["set alarm"]
+
+# Extended timer trigger words — covers natural speech
+TIMER_WORDS = [
+    "set timer", "start timer", "put the timer",
+    "timer for", "set a timer", "start a timer",
+    "put a timer", "create a timer"
+]
+
+# Extended alarm trigger words
+ALARM_WORDS = [
+    "set alarm", "set an alarm", "put alarm",
+    "wake me up", "alarm for", "create alarm"
+]
+
+# Word to number mapping for spoken numbers
+WORD_NUMBERS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "twenty": 20, "thirty": 30, "forty": 40,
+    "forty five": 45, "sixty": 60
+}
 
 # ================= FOLDERS =================
 
@@ -73,7 +104,7 @@ SCREEN_QA_TRIGGERS = [
 EXTRACT_TEXT_WORDS = [
     "extract text",
     "extract the text",
-    "extract the words",  # BUG FIX 1 — missing comma, was concatenated with next string
+    "extract the words",
     "read the page",
     "read screen text"
 ]
@@ -112,8 +143,18 @@ def _clean_search_query(text):
     return " ".join(t.split()).strip()
 
 def _extract_number(text):
+    # First try digits
     m = re.search(r"\d+", text)
-    return int(m.group()) if m else None
+    if m:
+        return int(m.group())
+
+    # Then try spoken words like "five", "thirty"
+    text_lower = text.lower()
+    for word, num in sorted(WORD_NUMBERS.items(), key=lambda x: -len(x[0])):
+        if word in text_lower:
+            return num
+
+    return None
 
 def _extract_alarm_time(text):
     m = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", text)
@@ -134,6 +175,21 @@ def parse_intent(text: str, lang: str) -> dict:
     t = text.lower().strip()
     logger.info(f"Parsing intent: {t}")
 
+    # ---------- SHUTDOWN ----------
+    if any(w in t for w in SHUTDOWN_WORDS):
+        return {"intent": INTENT_SYSTEM, "action": "shutdown"}
+
+    # ---------- RESTART ----------
+    if any(w in t for w in RESTART_WORDS):
+        return {"intent": INTENT_SYSTEM, "action": "restart"}
+
+    # ---------- SLEEP ----------
+    if any(w in t for w in SLEEP_WORDS):
+        return {"intent": INTENT_SYSTEM, "action": "sleep"}
+
+    # ---------- SCREENSHOT ----------
+    if any(w in t for w in SCREENSHOT_WORDS):
+        return {"intent": INTENT_SYSTEM, "action": "screenshot"}
     # ---------- SCREEN SUMMARY ----------
     if any(w in t for w in SCREEN_SUMMARY):
         return {"intent": INTENT_SYSTEM, "action": "screen_summary"}
@@ -147,7 +203,6 @@ def parse_intent(text: str, lang: str) -> dict:
         }
 
     # ---------- EXTRACT SCREEN TEXT ----------
-    # BUG FIX 2 — moved up before generic open/search checks
     if any(w in t for w in EXTRACT_TEXT_WORDS):
         return {
             "intent": INTENT_SYSTEM,
@@ -164,15 +219,12 @@ def parse_intent(text: str, lang: str) -> dict:
         return {"intent": INTENT_SYSTEM, "action": "explorer_search", "query": name}
 
     # ---------- OPEN FOLDER ----------
-    # BUG FIX 3 — moved BEFORE open file and open app checks
-    # "open downloads" was being swallowed by open_app
     if any(w in t for w in OPEN_WORDS):
         for folder in KNOWN_FOLDERS:
             if folder in t:
                 return {"intent": INTENT_SYSTEM, "action": "open_folder", "folder": folder}
 
     # ---------- OPEN FILE ----------
-    # BUG FIX 4 — now also detects file extensions so "open resume.pdf" works
     if any(w in t for w in OPEN_FILE_WORDS) or (
         any(w in t for w in OPEN_WORDS) and re.search(r"\.\w{2,4}\b", t)
     ):
@@ -188,22 +240,24 @@ def parse_intent(text: str, lang: str) -> dict:
             name = _strip_words(t, DELETE_WORDS + ["file"])
             return {"intent": INTENT_SYSTEM, "action": "delete_file", "name": name}
 
-    # ---------- TIMER ----------
+    # ---------- TIMER — must be before TIME check ----------
     if any(w in t for w in TIMER_WORDS):
         n = _extract_number(t)
         if n:
             if "minute" in t or "min" in t:
                 return {"intent": INTENT_SYSTEM, "action": "set_timer", "seconds": n * 60}
-            if "second" in t:
-                return {"intent": INTENT_SYSTEM, "action": "set_timer", "seconds": n}
+            if "hour" in t:
+                return {"intent": INTENT_SYSTEM, "action": "set_timer", "seconds": n * 3600}
+            # default to seconds
+            return {"intent": INTENT_SYSTEM, "action": "set_timer", "seconds": n}
 
-    # ---------- ALARM ----------
+    # ---------- ALARM — must be before TIME check ----------
     if any(w in t for w in ALARM_WORDS):
         at = _extract_alarm_time(t)
         if at:
             return {"intent": INTENT_SYSTEM, "action": "set_alarm", "hour": at[0], "minute": at[1]}
 
-    # ---------- TIME / DATE ----------
+    # ---------- TIME / DATE — comes AFTER timer/alarm ----------
     if any(w in t for w in TIME_WORDS):
         return {"intent": INTENT_SYSTEM, "action": "get_time"}
 
@@ -211,7 +265,6 @@ def parse_intent(text: str, lang: str) -> dict:
         return {"intent": INTENT_SYSTEM, "action": "get_date"}
 
     # ---------- SEARCH ----------
-    # BUG FIX 5 — guard against folder/app names triggering search
     if any(w in t for w in SEARCH_WORDS) and not any(f in t for f in KNOWN_FOLDERS):
         q = _clean_search_query(t)
         if "youtube" in t:
@@ -229,6 +282,10 @@ def parse_intent(text: str, lang: str) -> dict:
                 "background": any(b in t for b in BACKGROUND_WORDS),
                 "browser": _extract_browser(t)
             }
+
+    # ---------- CLOSE ALL — must be before CLOSE check ----------
+    if any(w in t for w in CLOSE_ALL_WORDS):
+        return {"intent": INTENT_SYSTEM, "action": "close_all"}
 
     # ---------- CLOSE ----------
     for w in CLOSE_WORDS:

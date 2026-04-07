@@ -168,6 +168,46 @@ def close_app(app: str) -> bool:
             p.terminate()
     return True
 
+def close_all_apps():
+    PROTECTED = [
+        # Windows system processes only
+        "explorer.exe", "svchost.exe", "system",
+        "registry", "smss.exe", "csrss.exe",
+        "wininit.exe", "services.exe", "lsass.exe",
+        "winlogon.exe", "dwm.exe", "taskmgr.exe",
+        "spoolsv.exe", "audiodg.exe", "fontdrvhost.exe",
+        "sihost.exe", "ctfmon.exe", "rundll32.exe",
+        "searchindexer.exe", "runtimebroker.exe",
+        "shellexperiencehost.exe", "startmenuexperiencehost.exe",
+        "textinputhost.exe", "securityhealthsystray.exe",
+        "searchhost.exe", "widgets.exe",
+        "msmpeng.exe", "nissrv.exe",
+
+        # Nebula only — nothing else!
+        "nebula.exe",
+    ]
+
+    logger.info("Closing all user apps...")
+
+    import os
+    current_pid = os.getpid()
+
+    for p in psutil.process_iter(["name", "pid"]):
+        try:
+            name = (p.info["name"] or "").lower()
+            pid = p.info["pid"]
+
+            if pid == current_pid:
+                continue
+
+            if name not in PROTECTED:
+                p.terminate()
+                logger.info(f"Closed: {name}")
+
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+        except Exception as e:
+            logger.error(f"Error closing {name}: {e}")
 
 def minimize_all():
     ctypes.windll.user32.keybd_event(0x5B,0,0,0)
